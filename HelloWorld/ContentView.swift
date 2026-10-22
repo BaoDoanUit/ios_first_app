@@ -8,7 +8,7 @@ import SwiftUI
 struct ContentView: View {
     let greeting: String
 
-    init(greeting: String = "Hello, world!") {
+    init(greeting: String = "Hello World, Bao Doan") {
         self.greeting = greeting
     }
 

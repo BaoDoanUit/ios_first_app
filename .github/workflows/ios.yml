@@ -181,3 +181,56 @@ jobs:
           name: HelloWorld
           path: ${{ runner.temp }}/HelloWorld.ipa
           if-no-files-found: error
+
+  publish-sidestore:
+    name: Publish unsigned IPA for SideStore
+    runs-on: macos-latest
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build unsigned device app
+        run: |
+          xcodebuild \
+            -project HelloWorld.xcodeproj \
+            -scheme HelloWorld \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath "$RUNNER_TEMP/DerivedData" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_IDENTITY="" \
+            CURRENT_PROJECT_VERSION="$GITHUB_RUN_NUMBER" \
+            build
+
+      - name: Package IPA
+        run: |
+          APP_PATH="$RUNNER_TEMP/DerivedData/Build/Products/Release-iphoneos/HelloWorld.app"
+          PACKAGE_PATH="$RUNNER_TEMP/ipa-package"
+          test -d "$APP_PATH" || {
+            echo "::error::Expected app not found at $APP_PATH"
+            exit 1
+          }
+          mkdir -p "$PACKAGE_PATH/Payload"
+          ditto "$APP_PATH" "$PACKAGE_PATH/Payload/HelloWorld.app"
+          (cd "$PACKAGE_PATH" && zip -qr "$RUNNER_TEMP/HelloWorld.ipa" Payload)
+          test -s "$RUNNER_TEMP/HelloWorld.ipa"
+
+      - name: Publish latest GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="sidestore-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}"
+          gh release create "$TAG" "$RUNNER_TEMP/HelloWorld.ipa" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "HelloWorld build ${GITHUB_RUN_NUMBER}" \
+            --notes "Unsigned iOS IPA for SideStore. Open the install link from an iPhone with SideStore installed." \
+            --latest
+          echo "### SideStore install/update" >> "$GITHUB_STEP_SUMMARY"
+          echo "Open this link on your iPhone to install or update the latest build:" >> "$GITHUB_STEP_SUMMARY"
+          echo 'sidestore://install?url=https%3A%2F%2Fgithub.com%2FBaoDoanUit%2Fios_first_app%2Freleases%2Flatest%2Fdownload%2FHelloWorld.ipa' >> "$GITHUB_STEP_SUMMARY"

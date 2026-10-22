@@ -9,7 +9,7 @@ import XCTest
 final class HelloWorldTests: XCTestCase {
     func testHelloWorldGreetingIsCorrect() {
         let view = ContentView()
-        XCTAssertEqual(view.greeting, "Hello, world!")
+        XCTAssertEqual(view.greeting, "Hello World, Bao Doan")
     }
 
     func testExample() {
