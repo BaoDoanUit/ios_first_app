@@ -25,8 +25,23 @@ jobs:
           scheme: ${{ 'default' }}
           platform: ${{ 'iOS Simulator' }}
         run: |
-          # xcrun xctrace returns via stderr, not the expected stdout (see https://developer.apple.com/forums/thread/663959)
-          device=`xcrun xctrace list devices 2>&1 | grep -oE 'iPhone.*?[^\(]+' | head -1 | awk '{$1=$1;print}' | sed -e "s/ Simulator$//"`
+          # Pick the first available iPhone on the newest iOS runtime so we don't depend on a specific device name existing on every Xcode version.
+          device=$(xcrun simctl list devices available -j | ruby -rjson -e '
+            data = JSON.parse($stdin.read)
+            runtimes = data["devices"].keys
+              .select { |k| k =~ /^com\.apple\.CoreSimulator\.SimRuntime\.iOS-/ }
+              .sort_by { |k| k.scan(/iOS-(\d+)-(\d+)/).flatten.map(&:to_i) }
+              .reverse
+            runtimes.each do |rt|
+              iphone = (data["devices"][rt] || []).find { |d| d["name"].start_with?("iPhone") && d["isAvailable"] }
+              if iphone
+                puts iphone["name"]
+                exit
+              end
+            end
+            puts "iPhone 17"
+          ')
+          echo "Using simulator: $device"
           if [ $scheme = default ]; then scheme=$(cat default); fi
           if [ "`ls -A | grep -i \\.xcworkspace\$`" ]; then filetype_parameter="workspace" && file_to_build="`ls -A | grep -i \\.xcworkspace\$`"; else filetype_parameter="project" && file_to_build="`ls -A | grep -i \\.xcodeproj\$`"; fi
           file_to_build=`echo $file_to_build | awk '{$1=$1;print}'`
@@ -36,8 +51,23 @@ jobs:
           scheme: ${{ 'default' }}
           platform: ${{ 'iOS Simulator' }}
         run: |
-          # xcrun xctrace returns via stderr, not the expected stdout (see https://developer.apple.com/forums/thread/663959)
-          device=`xcrun xctrace list devices 2>&1 | grep -oE 'iPhone.*?[^\(]+' | head -1 | awk '{$1=$1;print}' | sed -e "s/ Simulator$//"`
+          # Pick the first available iPhone on the newest iOS runtime so we don't depend on a specific device name existing on every Xcode version.
+          device=$(xcrun simctl list devices available -j | ruby -rjson -e '
+            data = JSON.parse($stdin.read)
+            runtimes = data["devices"].keys
+              .select { |k| k =~ /^com\.apple\.CoreSimulator\.SimRuntime\.iOS-/ }
+              .sort_by { |k| k.scan(/iOS-(\d+)-(\d+)/).flatten.map(&:to_i) }
+              .reverse
+            runtimes.each do |rt|
+              iphone = (data["devices"][rt] || []).find { |d| d["name"].start_with?("iPhone") && d["isAvailable"] }
+              if iphone
+                puts iphone["name"]
+                exit
+              end
+            end
+            puts "iPhone 17"
+          ')
+          echo "Using simulator: $device"
           if [ $scheme = default ]; then scheme=$(cat default); fi
           if [ "`ls -A | grep -i \\.xcworkspace\$`" ]; then filetype_parameter="workspace" && file_to_build="`ls -A | grep -i \\.xcworkspace\$`"; else filetype_parameter="project" && file_to_build="`ls -A | grep -i \\.xcodeproj\$`"; fi
           file_to_build=`echo $file_to_build | awk '{$1=$1;print}'`
