@@ -12,7 +12,8 @@ final class HelloWorldTests: XCTestCase {
         XCTAssertEqual(view.greeting, "Hello World, Bao Doan")
     }
 
-    func testExample() {
-        XCTAssertTrue(true, "Smoke test passes.")
+    func testCustomGreetingIsPreserved() {
+        let view = ContentView(greeting: "Welcome, Bao Doan")
+        XCTAssertEqual(view.greeting, "Welcome, Bao Doan")
     }
 }
