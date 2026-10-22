@@ -1,26 +1,34 @@
-name: iOS starter workflow
+name: iOS
 
 on:
   push:
     branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
+  workflow_dispatch:
+    inputs:
+      bundle_id:
+        description: "Bundle ID for the device build (must match your provisioning profile)"
+        required: false
+        default: "dev.baodoan.helloworld"
 
 jobs:
-  build:
-    name: Build and Test default scheme using any available iPhone simulator
+  test:
+    name: Build and Test on iOS Simulator
     runs-on: macos-latest
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
       - name: Set Default Scheme
         run: |
           scheme_list=$(xcodebuild -list -json | tr -d "\n")
           default=$(echo $scheme_list | ruby -e "require 'json'; puts JSON.parse(STDIN.gets)['project']['targets'][0]")
           echo $default | cat >default
           echo Using default scheme: $default
-      - name: Build
+
+      - name: Build (simulator)
         env:
           scheme: ${{ 'default' }}
           platform: ${{ 'iOS Simulator' }}
@@ -46,6 +54,7 @@ jobs:
           if [ "`ls -A | grep -i \\.xcworkspace\$`" ]; then filetype_parameter="workspace" && file_to_build="`ls -A | grep -i \\.xcworkspace\$`"; else filetype_parameter="project" && file_to_build="`ls -A | grep -i \\.xcodeproj\$`"; fi
           file_to_build=`echo $file_to_build | awk '{$1=$1;print}'`
           xcodebuild build-for-testing -scheme "$scheme" -"$filetype_parameter" "$file_to_build" -destination "platform=$platform,name=$device"
+
       - name: Test
         env:
           scheme: ${{ 'default' }}
@@ -72,3 +81,103 @@ jobs:
           if [ "`ls -A | grep -i \\.xcworkspace\$`" ]; then filetype_parameter="workspace" && file_to_build="`ls -A | grep -i \\.xcworkspace\$`"; else filetype_parameter="project" && file_to_build="`ls -A | grep -i \\.xcodeproj\$`"; fi
           file_to_build=`echo $file_to_build | awk '{$1=$1;print}'`
           xcodebuild test-without-building -scheme "$scheme" -"$filetype_parameter" "$file_to_build" -destination "platform=$platform,name=$device"
+
+  build-device:
+    name: Build signed .ipa for device install
+    runs-on: macos-latest
+    needs: test
+    # Only run when the user manually triggers the workflow (Actions -> Run workflow).
+    # Push events skip this job because it requires signing secrets.
+    if: github.event_name == 'workflow_dispatch'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Import Apple Distribution Certificate
+        env:
+          BUILD_CERTIFICATE_BASE64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
+          P12_PASSWORD: ${{ secrets.P12_PASSWORD }}
+        run: |
+          if [ -z "$BUILD_CERTIFICATE_BASE64" ]; then
+            echo "::error::Secret BUILD_CERTIFICATE_BASE64 is not set. Add it under Settings -> Secrets and variables -> Actions."
+            exit 1
+          fi
+          if [ -z "$P12_PASSWORD" ]; then
+            echo "::error::Secret P12_PASSWORD is not set. Add it under Settings -> Secrets and variables -> Actions."
+            exit 1
+          fi
+          KEYCHAIN_PATH=$RUNNER_TEMP/build.keychain-db
+          KEYCHAIN_PASSWORD=$(openssl rand -hex 24)
+          security create-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+          security set-keychain-settings -lut 21600 $KEYCHAIN_PATH
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+          security list-keychains -d user -s $KEYCHAIN_PATH $(security list-keychains -d user | tr -d '"')
+          echo "$BUILD_CERTIFICATE_BASE64" | base64 --decode > $RUNNER_TEMP/cert.p12
+          security import $RUNNER_TEMP/cert.p12 -P "$P12_PASSWORD" -A -t cert -f pkcs12 -k $KEYCHAIN_PATH
+          security list-keychain -d user
+          echo "Certificate imported. Installed signing identities:"
+          security find-identity -p codesigning $KEYCHAIN_PATH
+
+      - name: Import Provisioning Profile
+        env:
+          BUILD_PROVISION_PROFILE_BASE64: ${{ secrets.BUILD_PROVISION_PROFILE_BASE64 }}
+        run: |
+          if [ -z "$BUILD_PROVISION_PROFILE_BASE64" ]; then
+            echo "::error::Secret BUILD_PROVISION_PROFILE_BASE64 is not set. Add it under Settings -> Secrets and variables -> Actions."
+            exit 1
+          fi
+          PROFILE_PATH=$RUNNER_TEMP/HelloWorld.mobileprovision
+          echo "$BUILD_PROVISION_PROFILE_BASE64" | base64 --decode > "$PROFILE_PATH"
+          mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
+          cp "$PROFILE_PATH" ~/Library/MobileDevice/Provisioning\ Profiles/
+          echo "Profile installed. Name:"
+          /usr/libexec/PlistBuddy -c "Print :Name" /dev/stdin <<< "$(security cms -D -i "$PROFILE_PATH")"
+
+      - name: Archive for device
+        env:
+          BUNDLE_ID: ${{ github.event.inputs.bundle_id || 'dev.baodoan.helloworld' }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [ -z "$APPLE_TEAM_ID" ]; then
+            echo "::error::Secret APPLE_TEAM_ID is not set. Add it under Settings -> Secrets and variables -> Actions."
+            exit 1
+          fi
+          echo "Using bundle ID: $BUNDLE_ID"
+          echo "Using team ID:   $APPLE_TEAM_ID"
+          xcodebuild archive \
+            -project HelloWorld.xcodeproj \
+            -scheme HelloWorld \
+            -configuration Release \
+            -archivePath $RUNNER_TEMP/HelloWorld.xcarchive \
+            -destination "generic/platform=iOS" \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY="Apple Development" \
+            PRODUCT_BUNDLE_IDENTIFIER="$BUNDLE_ID" \
+            DEVELOPMENT_TEAM="$APPLE_TEAM_ID"
+
+      - name: Export .ipa
+        run: |
+          cat > $RUNNER_TEMP/ExportOptions.plist <<'EOF'
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key>
+            <string>development</string>
+            <key>signingStyle</key>
+            <string>manual</string>
+          </dict>
+          </plist>
+          EOF
+          xcodebuild -exportArchive \
+            -archivePath $RUNNER_TEMP/HelloWorld.xcarchive \
+            -exportPath $RUNNER_TEMP/ \
+            -exportOptionsPlist $RUNNER_TEMP/ExportOptions.plist
+
+      - name: Upload .ipa as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: HelloWorld
+          path: ${{ runner.temp }}/HelloWorld.ipa
+          if-no-files-found: error
